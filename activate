@@ -1,0 +1,4 @@
+#!/bin/bash
+# Simple activation script for Kronos .venv
+source .venv/bin/activate
+echo "✅ Virtual environment activated"
