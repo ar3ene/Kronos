@@ -10,7 +10,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+#lib/
 lib64/
 parts/
 sdist/
@@ -78,3 +78,7 @@ tmp/
 # documentation
 Kronos doc/
 *.md
+
+# Nextjs
+.next/
+node_modules/
