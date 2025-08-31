@@ -82,3 +82,7 @@ Kronos doc/
 # Nextjs
 .next/
 node_modules/
+
+# input / output
+input/
+output/
