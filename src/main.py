@@ -88,7 +88,11 @@ def main():
     
     if args.fetch:
         print("\n1. Fetching data from Yahoo Finance...")
-        data_dict = fetch_yahoo_data(asset_symbols, args.period, args.interval)
+        # Calculate needed period: lookback + predict weeks, converted to years with buffer
+        total_weeks_needed = args.lookback + args.predict
+        period_years = max(2, (total_weeks_needed + 26) // 52)  # At least 2 years, add buffer
+        fetch_period = f"{period_years}y"
+        data_dict = fetch_yahoo_data(asset_symbols, fetch_period, args.interval)
         if not data_dict or len(data_dict) == 0:
             print("No data fetched. Exiting.")
             return
@@ -127,16 +131,20 @@ def main():
     # Step 3: Make predictions
     print("\n3. Making predictions...")
     predictions = {}
+    validation_data = {}
     
     for asset, df in data_dict.items():
         try:
             print(f"\nPredicting for {asset}...")
-            pred_df = predictor.predict(
+            
+            # Always use validation mode: train on t0-4w之前的数据，预测t0-4w到t0+4w
+            pred_df, actual_validation = predictor.predict(
                 df=df,
                 lookback_weeks=args.lookback,
                 pred_weeks=args.predict
             )
             predictions[asset] = pred_df
+            validation_data[asset] = actual_validation
             
             # Display prediction summary
             last_price = df['close'].iloc[-1]
@@ -161,7 +169,8 @@ def main():
     for asset, pred_df in predictions.items():
         try:
             historical_df = data_dict[asset]
-            plot_predictions(historical_df, pred_df, asset)
+            actual_validation = validation_data[asset]
+            plot_predictions(historical_df, pred_df, asset, args.predict)
             generate_prediction_report(historical_df, pred_df, asset)
         except Exception as e:
             print(f"Error visualizing {asset}: {e}")

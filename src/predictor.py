@@ -28,11 +28,13 @@ class KronosPredictorWrapper:
         self.model_name = model_name
         
         # Load tokenizer and model from HuggingFace Hub
-        # Tokenizer and model are in separate repositories
+        print("Loading tokenizer...")
         self.tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
+        print("Loading model...")
         self.model = Kronos.from_pretrained(model_name)
         
         # Initialize predictor
+        print("Initializing predictor...")
         self.predictor = KronosPredictor(
             self.model, 
             self.tokenizer, 
@@ -53,23 +55,39 @@ class KronosPredictorWrapper:
             pred_weeks (int): Number of weeks to predict
             
         Returns:
-            tuple: (x_df, x_timestamp, y_timestamp)
+            tuple: (x_df, x_timestamp, y_timestamp, actual_validation_data)
         """
-        # Ensure we have enough data
-        if len(df) < lookback_weeks + pred_weeks:
-            raise ValueError(f"Not enough data. Need at least {lookback_weeks + pred_weeks} weeks, got {len(df)}")
+        # Always use validation mode: train on t0-4w之前的数据，预测t0-4w到t0+4w
+        total_weeks_needed = lookback_weeks + pred_weeks
+        if len(df) < total_weeks_needed:
+            raise ValueError(f"Not enough data. Need at least {total_weeks_needed} weeks, got {len(df)}")
         
-        # Use the most recent data for prediction
-        x_df = df.iloc[-lookback_weeks:].copy()
+        # Training data: t0-4w之前的所有数据（比如t0-56w到t0-4w）
+        x_df = df.iloc[-total_weeks_needed:-pred_weeks//2].copy()
         
-        # Extract timestamps for input and prediction periods
+        # Prediction period: t0-4w to t0+4w (8 weeks)
+        # We need future timestamps for the prediction period
+        # Use available data for first half, generate future dates for second half
+        available_future = df['timestamps'].iloc[-pred_weeks//2:].copy()
+        
+        # Generate future dates for the prediction beyond available data
+        if len(available_future) < pred_weeks:
+            last_timestamp = available_future.iloc[-1] if len(available_future) > 0 else df['timestamps'].iloc[-1]
+            future_weeks = pred_weeks - len(available_future)
+            future_dates = pd.date_range(start=last_timestamp + pd.Timedelta(weeks=1), 
+                                       periods=future_weeks, 
+                                       freq='W')
+            y_timestamp = pd.concat([available_future, pd.Series(future_dates)])
+        else:
+            y_timestamp = available_future.iloc[:pred_weeks]
+        
+        # Actual data for validation: t0-4w to t0 (4 weeks)
+        actual_validation_data = df.iloc[-pred_weeks//2:].copy()
+        
+        # Extract timestamps for input period
         x_timestamp = x_df['timestamps']
         
-        # For y_timestamp, we need to use actual historical timestamps from the next period
-        # KronosPredictor expects actual timestamps, not generated future ones
-        y_timestamp = df['timestamps'].iloc[-pred_weeks:]
-        
-        return x_df[['open', 'high', 'low', 'close', 'volume', 'amount']], x_timestamp, y_timestamp
+        return x_df[['open', 'high', 'low', 'close', 'volume', 'amount']], x_timestamp, y_timestamp, actual_validation_data
     
     def predict(self, df, lookback_weeks=50, pred_weeks=2, T=1.0, top_p=0.9, sample_count=1):
         """
@@ -84,12 +102,14 @@ class KronosPredictorWrapper:
             sample_count (int): Number of samples to generate
             
         Returns:
-            pandas.DataFrame: Prediction results
+            tuple: (pred_df, actual_validation_data)
         """
         # Prepare data for prediction
-        x_df, x_timestamp, y_timestamp = self.prepare_prediction_data(df, lookback_weeks, pred_weeks)
+        x_df, x_timestamp, y_timestamp, actual_validation_data = self.prepare_prediction_data(
+            df, lookback_weeks, pred_weeks
+        )
         
-        # Make prediction
+        # Make prediction using the original KronosPredictor
         pred_df = self.predictor.predict(
             df=x_df,
             x_timestamp=x_timestamp,
@@ -101,30 +121,4 @@ class KronosPredictorWrapper:
             verbose=True
         )
         
-        return pred_df
-    
-    def predict_multiple_assets(self, data_dict, lookback_weeks=50, pred_weeks=2):
-        """
-        Predict multiple assets.
-        
-        Args:
-            data_dict (dict): Dictionary with asset symbols and DataFrames
-            lookback_weeks (int): Number of weeks to look back
-            pred_weeks (int): Number of weeks to predict
-            
-        Returns:
-            dict: Dictionary with asset symbols and prediction DataFrames
-        """
-        predictions = {}
-        
-        for symbol, df in data_dict.items():
-            try:
-                print(f"\nPredicting for {symbol}...")
-                pred_df = self.predict(df, lookback_weeks, pred_weeks)
-                predictions[symbol] = pred_df
-                print(f"Successfully predicted {pred_weeks} weeks for {symbol}")
-                
-            except Exception as e:
-                print(f"Error predicting for {symbol}: {e}")
-        
-        return predictions
+        return pred_df, actual_validation_data

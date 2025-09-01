@@ -1,13 +1,38 @@
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import pandas as pd
 import os
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
-def plot_predictions(historical_df, pred_df, asset_name, output_dir="output", show_plot=False):
+def calculate_prediction_accuracy(pred_df, actual_df):
     """
-    Create and save visualization of predictions.
+    Calculate prediction accuracy between predicted and actual prices.
+    
+    Args:
+        pred_df (pandas.DataFrame): Predicted data
+        actual_df (pandas.DataFrame): Actual data
+        
+    Returns:
+        float: Accuracy percentage (100% = perfect prediction)
+    """
+    if len(pred_df) != len(actual_df):
+        raise ValueError("Predicted and actual data must have the same length")
+    
+    # Calculate mean absolute percentage error
+    pred_prices = pred_df['close'].values
+    actual_prices = actual_df['close'].values
+    
+    mape = np.mean(np.abs((actual_prices - pred_prices) / actual_prices)) * 100
+    accuracy = 100 - mape
+    
+    return max(0, accuracy)  # Ensure accuracy doesn't go below 0%
+
+
+def plot_predictions(historical_df, pred_df, asset_name, pred_weeks=8, output_dir="output", show_plot=False):
+    """
+    Create and save visualization of predictions with Ground Truth vs Prediction comparison.
     
     Args:
         historical_df (pandas.DataFrame): Historical data
@@ -26,24 +51,59 @@ def plot_predictions(historical_df, pred_df, asset_name, output_dir="output", sh
     # Create figure with subplots
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
     
-    # Plot close prices
-    ax1.plot(historical_df.index, historical_df['close'], 
-             label='Historical', color='blue', linewidth=2, alpha=0.8)
-    ax1.plot(pred_df.index, pred_df['close'], 
-             label='Predicted', color='red', linewidth=2, linestyle='--')
+    # Combine historical and prediction data for clear Ground Truth vs Prediction comparison
+    # Use timestamps for x-axis - historical has 'timestamps' column
+    historical_timestamps = historical_df['timestamps']
+    
+    # Prediction starts at t0-4 weeks (2025-08-04), not at the end of historical data
+    # Use the prediction DataFrame index which should contain the correct timestamps
+    if hasattr(pred_df.index, 'iloc') and len(pred_df.index) > 0:
+        pred_timestamps = pred_df.index
+        prediction_start = pred_timestamps.iloc[0] if hasattr(pred_timestamps, 'iloc') else pred_timestamps[0]
+    else:
+        # Fallback: prediction starts 4 weeks before the end of historical data
+        prediction_start = historical_timestamps.iloc[-pred_weeks//2]
+        pred_timestamps = pd.date_range(start=prediction_start, periods=len(pred_df), freq='W-MON')
+    
+    # Plot close prices - Ground Truth vs Prediction
+    ax1.plot(historical_timestamps, historical_df['close'], 
+             label='Ground Truth', color='blue', linewidth=2)
+    ax1.plot(pred_timestamps, pred_df['close'], 
+             label='Prediction', color='red', linewidth=2, linestyle='--')
+    
+    # Add vertical line at the prediction start point
+    ax1.axvline(x=prediction_start, color='gray', linestyle=':', alpha=0.7, label='Prediction Start')
+    
+    # Format x-axis with proper dates
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+    ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
+    
     ax1.set_ylabel('Close Price', fontsize=12)
-    ax1.set_title(f'{asset_name} - Price Prediction (Next 2 Weeks)', fontsize=14)
-    ax1.legend(fontsize=10)
+    ax1.set_title(f'{asset_name} - P & V prediction', fontsize=14)
+    ax1.legend(loc='lower left', fontsize=10)
     ax1.grid(True, alpha=0.3)
     
-    # Plot volume
-    ax2.plot(historical_df.index, historical_df['volume'], 
-             label='Historical Volume', color='green', linewidth=1, alpha=0.7)
-    ax2.plot(pred_df.index, pred_df['volume'], 
-             label='Predicted Volume', color='orange', linewidth=1, linestyle='--')
+    # Plot volume as bar charts with red/green color based on price movement
+    # Historical volume bars - green for up days, red for down days
+    historical_volume_colors = ['green' if close > open else 'red' for close, open in 
+                               zip(historical_df['close'], historical_df['open'])]
+    for i, (timestamp, volume) in enumerate(zip(historical_timestamps, historical_df['volume'])):
+        ax2.bar(timestamp, volume, width=5, color=historical_volume_colors[i], alpha=0.7)
+    
+    # Prediction volume bars - keep orange for predictions
+    ax2.bar(pred_timestamps, pred_df['volume'], 
+            width=5, label='Prediction Volume', color='orange', alpha=0.7)
+    
+    # Add legend for volume
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='green', label='Ground Truth Volume (Up)'),
+        Patch(facecolor='red', label='Ground Truth Volume (Down)'),
+        Patch(facecolor='orange', label='Prediction Volume')
+    ]
+    ax2.legend(handles=legend_elements, loc='upper left', fontsize=10)
     ax2.set_ylabel('Volume', fontsize=12)
     ax2.set_xlabel('Date', fontsize=12)
-    ax2.legend(fontsize=10)
     ax2.grid(True, alpha=0.3)
     
     # Format x-axis dates
@@ -78,7 +138,7 @@ def create_comparison_plot(predictions_dict, output_dir="output", show_plot=Fals
     
     fig, ax = plt.subplots(figsize=(12, 6))
     
-    colors = plt.cm.Set3(np.linspace(0, 1, len(predictions_dict)))
+    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
     
     for (asset_name, pred_df), color in zip(predictions_dict.items(), colors):
         # Get the last predicted close price
